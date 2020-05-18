@@ -1,0 +1,159 @@
+---
+
+- step:
+    name: preprocess
+    image: arimbr/valohai-fasttext-example
+    command: python cli.py classification preprocess {parameters}
+    inputs:
+      - name: data
+        default: s3://valohai-fasttext-example/bbc/data.csv
+    parameters:
+     - name: output_data
+       description: name of the output file
+       type: string
+       default: preprocessed.txt
+     - name: text_column
+       description: name of the text column (pass multiple column names separated with a ,)
+       type: string
+       default: text
+     - name: label_column
+       description: name of label column
+       type: string
+       default: label
+     - name: engine
+       description: CSV parser engine to use (python, python-fwf, c)
+       type: string
+       default: label
+
+- step:
+    name: split
+    image: arimbr/valohai-fasttext-example
+    command: python cli.py classification split {parameters}
+    inputs:
+      - name: data
+    parameters:
+      - name: output_train
+        description: name of the train output file
+        type: string
+        default: train.txt
+      - name: output_validation
+        description: name of the validation output file
+        type: string
+        default: validation.txt
+      - name: output_test
+        description: name of the test output file
+        type: string
+        default: test.txt
+      - name: train_ratio
+        description: ratio of the train data
+        type: float
+        default: 0.8
+      - name: validation_ratio
+        description: ratio of the validation data
+        type: float
+        default: 0.1
+      - name: test_ratio
+        description: ratio of the test data
+        type: float
+        default: 0.1
+      - name: shuffle
+        description: shuffle data
+        type: flag
+        default: true
+
+- step:
+    name: autotune
+    image: arimbr/valohai-fasttext-example
+    command: python cli.py classification autotune {parameters}
+    inputs:
+      - name: train
+      - name: validation
+    parameters:
+     - name: metric
+       description: metric objective {f1, f1:labelname}
+       type: string
+       default: f1
+     - name: k
+       description: number of predictions used for evaluation
+       type: integer
+       default: 1
+     - name: duration
+       description: maximum duration in seconds
+       type: integer
+       default: 1200
+     - name: model_size
+       description: constraint model file size (empty = do not quantize)
+       type: string
+       default: 2000M
+
+- step:
+    name: train
+    image: arimbr/valohai-fasttext-example
+    command: python cli.py classification train {parameters}
+    inputs:
+      - name: data
+      - name: parameters
+
+- step:
+    name: test
+    image: arimbr/valohai-fasttext-example
+    command: python cli.py classification test {parameters}
+    inputs:
+      - name: test
+      - name: model
+    parameters:
+     - name: k
+       description: number of labels to predict
+       type: integer
+       default: 1
+
+- step:
+    name: predict
+    image: arimbr/valohai-fasttext-example
+    command: python cli.py classification predict {parameters}
+    inputs:
+      - name: data
+      - name: model
+    parameters:
+     - name: k
+       description: number of labels to predict
+       type: integer
+       default: 1
+
+- pipeline:
+    name: fasttext-train
+    nodes:
+      - name: split
+        type: execution
+        step: split
+      - name: preprocess
+        type: execution
+        step: preprocess
+      - name: autotune
+        type: execution
+        step: autotune
+      - name: train
+        type: execution
+        step: train
+      - name: test
+        type: execution
+        step: test
+    edges:
+      - [preprocess.output.preprocessed.txt, split.input.data]
+      - [preprocess.output.preprocessed.txt, train.input.data]
+      - [split.output.train.txt, autotune.input.train]
+      - [split.output.validation.txt, autotune.input.validation]
+      - [split.output.test.txt, test.input.test]
+      - [autotune.output.parameters.json, train.input.parameters]
+      - [autotune.output.train_model.bin, test.input.model]
+
+- endpoint:
+    name: predict
+    description: Predict labels from text
+    image: arimbr/valohai-fasttext-example:deployment
+    port: 8000
+    server-command: uvicorn api:app --host 0.0.0.0 --port 8000
+    files:
+      - name: model
+        description: Model output file from training step.
+        path: model.bin
